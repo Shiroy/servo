@@ -32,6 +32,7 @@ use selectors::matching::DeclarationBlock;
 use stylesheets::Origin;
 use values::AuExtensionMethods;
 use values::computed::{self, TContext, ToComputedValue};
+use values::HasViewportPercentage;
 use values::specified::BorderStyle;
 
 use self::property_bit_field::PropertyBitField;
@@ -69,7 +70,8 @@ class Keyword(object):
 
 class Longhand(object):
     def __init__(self, name, derived_from=None, keyword=None,
-                 custom_cascade=False, experimental=False, internal=False):
+            custom_cascade=False, experimental=False,
+            internal=False,depend_of_viewport_size=False):
         self.name = name
         self.keyword = keyword
         self.ident = to_rust_ident(name)
@@ -78,6 +80,7 @@ class Longhand(object):
         self.experimental = ("layout.%s.enabled" % name) if experimental else None
         self.custom_cascade = custom_cascade
         self.internal = internal
+        self.depend_of_viewport_size = depend_of_viewport_size
         if derived_from is None:
             self.derived_from = None
         else:
@@ -137,6 +140,21 @@ def set_product(p):
     global CONFIG
     CONFIG['product'] = p
 
+# This list was generated using `grep "impl HasViewportPercentage for" values.rs | cut -d' ' -f8`
+VIEWPORT_SIZE_DEPENDANT_TYPES = [
+    "Length",
+    "CalcValueNode",
+    "SimplifiedValueNode",
+    "LengthOrPercentage",
+    "LengthOrPercentageOrAuto",
+    "LengthOrPercentageOrNone",
+    "LengthOrNone",
+    "PositionComponent"
+]
+
+def viewport_size_dependant(type):
+    return type in VIEWPORT_SIZE_DEPENDANT_TYPES
+
 def new_style_struct(name, is_inherited, gecko_name=None, additional_methods=None):
     global THIS_STYLE_STRUCT
 
@@ -174,7 +192,8 @@ pub mod longhands {
     use values::specified;
 
     <%def name="raw_longhand(name, keyword=None, derived_from=None, products='gecko,servo',
-                             custom_cascade=False, experimental=False, internal=False)">
+                             custom_cascade=False, experimental=False,
+                             internal=False, depend_of_viewport_size=False)">
     <%
         if not CONFIG['product'] in products:
             return ""
@@ -186,7 +205,8 @@ pub mod longhands {
                             keyword=keyword,
                             custom_cascade=custom_cascade,
                             experimental=experimental,
-                            internal=internal)
+                            internal=internal,
+                            depend_of_viewport_size=depend_of_viewport_size)
         property.style_struct = THIS_STYLE_STRUCT
         THIS_STYLE_STRUCT.longhands.append(property)
         LONGHANDS.append(property)
@@ -315,10 +335,12 @@ pub mod longhands {
     </%def>
 
     <%def name="longhand(name, derived_from=None, keyword=None, products='gecko,servo',
-                         custom_cascade=False, experimental=False, internal=False)">
+                         custom_cascade=False, experimental=False, internal=False,
+                         depend_of_viewport_size=False)">
         <%self:raw_longhand name="${name}" derived_from="${derived_from}" keyword="${keyword}"
                 products="${products}" custom_cascade="${custom_cascade}"
-                experimental="${experimental}" internal="${internal}">
+                experimental="${experimental}" internal="${internal}"
+                depend_of_viewport_size="${depend_of_viewport_size}">
             ${caller.body()}
             % if derived_from is None:
                 pub fn parse_specified(context: &ParserContext, input: &mut Parser)
@@ -368,7 +390,8 @@ pub mod longhands {
     </%def>
 
     <%def name="predefined_type(name, type, initial_value, parse_method='parse', products='gecko,servo')">
-        <%self:longhand name="${name}" products="${products}">
+        <%self:longhand name="${name}" products="${products}"
+                        depend_of_viewport_size="${viewport_size_dependant(type)}">
             #[allow(unused_imports)]
             use app_units::Au;
             pub type SpecifiedValue = specified::${type};
@@ -414,10 +437,11 @@ pub mod longhands {
     % endfor
 
     % for side in ["top", "right", "bottom", "left"]:
-        <%self:longhand name="border-${side}-width">
+        <%self:longhand name="border-${side}-width" depend_of_viewport_size="True">
             use app_units::Au;
             use cssparser::ToCss;
             use std::fmt;
+            use values::HasViewportPercentage;
 
             impl ToCss for SpecifiedValue {
                 fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
@@ -432,6 +456,14 @@ pub mod longhands {
             }
             #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
             pub struct SpecifiedValue(pub specified::Length);
+
+            impl HasViewportPercentage for SpecifiedValue {
+                fn has_viewport_percentage(&self) -> bool {
+                    let &SpecifiedValue(length) = self;
+                    length.has_viewport_percentage()
+                }
+            }
+
             pub mod computed_value {
                 use app_units::Au;
                 pub type T = Au;
@@ -478,11 +510,12 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="outline-width">
+    <%self:longhand name="outline-width" depend_of_viewport_size="True">
         use app_units::Au;
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         impl ToCss for SpecifiedValue {
             fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
@@ -495,6 +528,14 @@ pub mod longhands {
         }
         #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
         pub struct SpecifiedValue(pub specified::Length);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(length) = self;
+                length.has_viewport_percentage()
+            }
+        }
+
         pub mod computed_value {
             use app_units::Au;
             pub type T = Au;
@@ -730,8 +771,9 @@ pub mod longhands {
                        additional_methods=[Method("clone__servo_text_decorations_in_effect",
                                                   "longhands::_servo_text_decorations_in_effect::computed_value::T")])}
 
-    <%self:longhand name="line-height">
+    <%self:longhand name="line-height" depend_of_viewport_size="True">
         use cssparser::ToCss;
+        use values::HasViewportPercentage;
         use std::fmt;
         use values::AuExtensionMethods;
         use values::CSSFloat;
@@ -741,6 +783,15 @@ pub mod longhands {
             Normal,
             Number(CSSFloat),
             LengthOrPercentage(specified::LengthOrPercentage),
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::LengthOrPercentage(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -824,9 +875,10 @@ pub mod longhands {
 
     ${switch_to_style_struct("Box")}
 
-    <%self:longhand name="vertical-align">
+    <%self:longhand name="vertical-align" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
+        use values::HasViewportPercentage;
 
         <% vertical_align_keywords = (
             "baseline sub super top text-top middle bottom text-bottom".split()) %>
@@ -837,6 +889,15 @@ pub mod longhands {
                 ${to_rust_ident(keyword)},
             % endfor
             LengthOrPercentage(specified::LengthOrPercentage),
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::LengthOrPercentage(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -1444,10 +1505,11 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="background-position">
+    <%self:longhand name="background-position" depend_of_viewport_size="True">
             use cssparser::ToCss;
             use std::fmt;
             use values::AuExtensionMethods;
+            use values::HasViewportPercentage;
 
             pub mod computed_value {
                 use values::computed::LengthOrPercentage;
@@ -1463,6 +1525,12 @@ pub mod longhands {
             pub struct SpecifiedValue {
                 pub horizontal: specified::LengthOrPercentage,
                 pub vertical: specified::LengthOrPercentage,
+            }
+
+            impl HasViewportPercentage for SpecifiedValue {
+                fn has_viewport_percentage(&self) -> bool {
+                    return self.horizontal.has_viewport_percentage() || self.vertical.has_viewport_percentage()
+                }
             }
 
             impl ToCss for SpecifiedValue {
@@ -1565,10 +1633,11 @@ pub mod longhands {
 
     ${single_keyword("background-origin", "padding-box border-box content-box")}
 
-    <%self:longhand name="background-size">
+    <%self:longhand name="background-size" depend_of_viewport_size="True">
         use cssparser::{ToCss, Token};
         use std::ascii::AsciiExt;
         use std::fmt;
+        use values::HasViewportPercentage;
 
         pub mod computed_value {
             use values::computed::LengthOrPercentageOrAuto;
@@ -1611,6 +1680,12 @@ pub mod longhands {
             }
         }
 
+        impl HasViewportPercentage for SpecifiedExplicitSize {
+            fn has_viewport_percentage(&self) -> bool {
+                self.width.has_viewport_percentage() || self.height.has_viewport_percentage()
+            }
+        }
+
         impl ToCss for computed_value::ExplicitSize {
             fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
                 try!(self.width.to_css(dest));
@@ -1625,6 +1700,15 @@ pub mod longhands {
             Explicit(SpecifiedExplicitSize),
             Cover,
             Contain,
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::Explicit(ref explicit_size) => explicit_size.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -1981,11 +2065,12 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="font-size">
+    <%self:longhand name="font-size" depend_of_viewport_size="True">
         use app_units::Au;
         use cssparser::ToCss;
         use std::fmt;
         use values::FONT_MEDIUM_PX;
+        use values::HasViewportPercentage;
         use values::specified::{LengthOrPercentage, Length, Percentage};
 
         impl ToCss for SpecifiedValue {
@@ -1996,6 +2081,14 @@ pub mod longhands {
 
         #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
         pub struct SpecifiedValue(pub specified::LengthOrPercentage);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(length) = self;
+                return length.has_viewport_percentage()
+            }
+        }
+
         pub mod computed_value {
             use app_units::Au;
             pub type T = Au;
@@ -2108,15 +2201,25 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="letter-spacing">
+    <%self:longhand name="letter-spacing" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Debug, Clone, Copy, PartialEq, HeapSizeOf)]
         pub enum SpecifiedValue {
             Normal,
             Specified(specified::Length),
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::Specified(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -2170,15 +2273,25 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="word-spacing">
+    <%self:longhand name="word-spacing" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Debug, Clone, Copy, PartialEq, HeapSizeOf)]
         pub enum SpecifiedValue {
             Normal,
             Specified(specified::Length),  // FIXME(SimonSapin) support percentages
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::Specified(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -2490,9 +2603,10 @@ pub mod longhands {
 
     ${single_keyword("caption-side", "top bottom")}
 
-    <%self:longhand name="border-spacing">
+    <%self:longhand name="border-spacing" depend_of_viewport_size="True">
         use app_units::Au;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         use cssparser::ToCss;
         use std::fmt;
@@ -2511,6 +2625,12 @@ pub mod longhands {
         pub struct SpecifiedValue {
             pub horizontal: specified::Length,
             pub vertical: specified::Length,
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                return self.horizontal.has_viewport_percentage() || self.has_viewport_percentage()
+            }
         }
 
         #[inline]
@@ -2663,15 +2783,25 @@ pub mod longhands {
 
     ${new_style_struct("Column", is_inherited=False, gecko_name="nsStyleColumn")}
 
-    <%self:longhand name="column-width" experimental="True">
+    <%self:longhand name="column-width" experimental="True" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Debug, Clone, Copy, PartialEq, HeapSizeOf)]
         pub enum SpecifiedValue {
             Auto,
             Specified(specified::Length),
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::Specified(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -2790,15 +2920,25 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="column-gap" experimental="True">
+    <%self:longhand name="column-gap" experimental="True" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Debug, Clone, Copy, PartialEq, HeapSizeOf)]
         pub enum SpecifiedValue {
             Normal,
             Specified(specified::Length),
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedValue::Specified(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -2896,13 +3036,21 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="box-shadow">
+    <%self:longhand name="box-shadow" depend_of_viewport_size="True">
         use cssparser::{self, ToCss};
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
         pub struct SpecifiedValue(Vec<SpecifiedBoxShadow>);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(ref vec) = self;
+                vec.iter().any(|ref x| x.has_viewport_percentage())
+            }
+        }
 
         #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
         pub struct SpecifiedBoxShadow {
@@ -2912,6 +3060,15 @@ pub mod longhands {
             pub spread_radius: specified::Length,
             pub color: Option<specified::CSSColor>,
             pub inset: bool,
+        }
+
+        impl HasViewportPercentage for SpecifiedBoxShadow {
+            fn has_viewport_percentage(&self) -> bool {
+                self.offset_x.has_viewport_percentage() ||
+                self.offset_y.has_viewport_percentage() ||
+                self.blur_radius.has_viewport_percentage() ||
+                self.spread_radius.has_viewport_percentage()
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -3104,10 +3261,11 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="clip">
+    <%self:longhand name="clip" depend_of_viewport_size="True">
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         // NB: `top` and `left` are 0 if `auto` per CSS 2.1 11.1.2.
 
@@ -3164,8 +3322,24 @@ pub mod longhands {
             pub left: specified::Length,
         }
 
+        impl HasViewportPercentage for SpecifiedClipRect {
+            fn has_viewport_percentage(&self) -> bool {
+                self.top.has_viewport_percentage() ||
+                self.right.map_or(false, |x| x.has_viewport_percentage()) ||
+                self.bottom.map_or(false, |x| x.has_viewport_percentage()) ||
+                self.left.has_viewport_percentage()
+            }
+        }
+
         #[derive(Clone, Debug, PartialEq, Copy, HeapSizeOf)]
         pub struct SpecifiedValue(Option<SpecifiedClipRect>);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(clip) = self;
+                clip.map_or(false, |x| x.has_viewport_percentage())
+            }
+        }
 
         impl ToCss for SpecifiedClipRect {
             fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
@@ -3259,13 +3433,21 @@ pub mod longhands {
 
     ${switch_to_style_struct("InheritedText")}
 
-    <%self:longhand name="text-shadow">
+    <%self:longhand name="text-shadow" depend_of_viewport_size="True">
         use cssparser::{self, ToCss};
         use std::fmt;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
 
         #[derive(Clone, PartialEq, Debug, HeapSizeOf)]
         pub struct SpecifiedValue(Vec<SpecifiedTextShadow>);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(ref vec) = self;
+                vec.iter().any(|ref x| x.has_viewport_percentage())
+            }
+        }
 
         #[derive(Clone, PartialEq, Debug, HeapSizeOf)]
         pub struct SpecifiedTextShadow {
@@ -3273,6 +3455,14 @@ pub mod longhands {
             pub offset_y: specified::Length,
             pub blur_radius: specified::Length,
             pub color: Option<specified::CSSColor>,
+        }
+
+        impl HasViewportPercentage for SpecifiedTextShadow {
+            fn has_viewport_percentage(&self) -> bool {
+                self.offset_x.has_viewport_percentage() ||
+                self.offset_y.has_viewport_percentage() ||
+                self.blur_radius.has_viewport_percentage()
+            }
         }
 
         pub mod computed_value {
@@ -3439,16 +3629,24 @@ pub mod longhands {
 
     ${switch_to_style_struct("Effects")}
 
-    <%self:longhand name="filter">
+    <%self:longhand name="filter" depend_of_viewport_size="True">
         //pub use self::computed_value::T as SpecifiedValue;
         use cssparser::ToCss;
         use std::fmt;
         use values::AuExtensionMethods;
         use values::CSSFloat;
+        use values::HasViewportPercentage;
         use values::specified::{Angle, Length};
 
         #[derive(Debug, Clone, PartialEq, HeapSizeOf)]
         pub struct SpecifiedValue(Vec<SpecifiedFilter>);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(ref vec) = self;
+                vec.iter().any(|ref x| x.has_viewport_percentage())
+            }
+        }
 
         // TODO(pcwalton): `drop-shadow`
         #[derive(Clone, PartialEq, Debug, HeapSizeOf)]
@@ -3462,6 +3660,15 @@ pub mod longhands {
             Opacity(CSSFloat),
             Saturate(CSSFloat),
             Sepia(CSSFloat),
+        }
+
+        impl HasViewportPercentage for SpecifiedFilter {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedFilter::Blur(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
         }
 
         pub mod computed_value {
@@ -3671,9 +3878,10 @@ pub mod longhands {
         }
     </%self:longhand>
 
-    <%self:longhand name="transform">
+    <%self:longhand name="transform" depend_of_viewport_size="True">
         use app_units::Au;
         use values::CSSFloat;
+        use values::HasViewportPercentage;
 
         use cssparser::ToCss;
         use std::fmt;
@@ -3770,6 +3978,16 @@ pub mod longhands {
             Perspective(specified::Length),
         }
 
+        impl HasViewportPercentage for SpecifiedOperation {
+            fn has_viewport_percentage(&self) -> bool {
+                match *self {
+                    SpecifiedOperation::Translate(_, l1, l2, l3) => l1.has_viewport_percentage() || l2.has_viewport_percentage() || l3.has_viewport_percentage(),
+                    SpecifiedOperation::Perspective(length) => length.has_viewport_percentage(),
+                    _ => false
+                }
+            }
+        }
+
         impl ToCss for computed_value::T {
             fn to_css<W>(&self, _: &mut W) -> fmt::Result where W: fmt::Write {
                 // TODO(pcwalton)
@@ -3838,6 +4056,13 @@ pub mod longhands {
 
         #[derive(Clone, Debug, PartialEq, HeapSizeOf)]
         pub struct SpecifiedValue(Vec<SpecifiedOperation>);
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                let &SpecifiedValue(ref specified_operations) = self;
+                specified_operations.iter().any(|ref x| x.has_viewport_percentage())
+            }
+        }
 
         impl ToCss for SpecifiedValue {
             fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
@@ -4215,9 +4440,10 @@ pub mod longhands {
 
     ${single_keyword("transform-style", "auto flat preserve-3d")}
 
-    <%self:longhand name="transform-origin">
+    <%self:longhand name="transform-origin" depend_of_viewport_size="True">
         use app_units::Au;
         use values::AuExtensionMethods;
+        use values::HasViewportPercentage;
         use values::specified::{Length, LengthOrPercentage, Percentage};
 
         use cssparser::ToCss;
@@ -4239,6 +4465,14 @@ pub mod longhands {
             horizontal: LengthOrPercentage,
             vertical: LengthOrPercentage,
             depth: Length,
+        }
+
+        impl HasViewportPercentage for SpecifiedValue{
+            fn has_viewport_percentage(&self) -> bool {
+                self.horizontal.has_viewport_percentage() ||
+                self.vertical.has_viewport_percentage() ||
+                self.depth.has_viewport_percentage()
+            }
         }
 
         impl ToCss for computed_value::T {
@@ -4297,7 +4531,8 @@ pub mod longhands {
                       "LengthOrNone",
                       "computed::LengthOrNone::None")}
 
-    <%self:longhand name="perspective-origin">
+    <%self:longhand name="perspective-origin" depend_of_viewport_size="True">
+        use values::HasViewportPercentage;
         use values::specified::{LengthOrPercentage, Percentage};
 
         use cssparser::ToCss;
@@ -4325,6 +4560,12 @@ pub mod longhands {
         pub struct SpecifiedValue {
             horizontal: LengthOrPercentage,
             vertical: LengthOrPercentage,
+        }
+
+        impl HasViewportPercentage for SpecifiedValue {
+            fn has_viewport_percentage(&self) -> bool {
+                self.horizontal.has_viewport_percentage() || self.vertical.has_viewport_percentage()
+            }
         }
 
         impl ToCss for SpecifiedValue {
@@ -6112,6 +6353,19 @@ impl fmt::Display for PropertyDeclarationName {
                 f.write_str(n)
             }
             PropertyDeclarationName::Internal => Ok(()),
+        }
+    }
+}
+
+impl HasViewportPercentage for PropertyDeclaration {
+    fn has_viewport_percentage(&self) -> bool {
+        match *self {
+        % for property in LONGHANDS:
+            % if property.depend_of_viewport_size:
+                PropertyDeclaration::${property.camel_case}(DeclaredValue::Value(ref val)) => val.has_viewport_percentage(),
+            % endif
+        % endfor
+        _ => false
         }
     }
 }

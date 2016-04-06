@@ -87,11 +87,16 @@ pub type CSSFloat = f32;
 
 pub const FONT_MEDIUM_PX: i32 = 16;
 
+pub trait HasViewportPercentage {
+    fn has_viewport_percentage(&self) -> bool;
+}
+
 
 pub mod specified {
     use app_units::Au;
     use cssparser::{self, CssStringWriter, Parser, ToCss, Token};
     use euclid::size::Size2D;
+    use super::HasViewportPercentage;
     use parser::ParserContext;
     use std::ascii::AsciiExt;
     use std::cmp;
@@ -256,6 +261,15 @@ pub mod specified {
         Calc(CalcLengthOrPercentage),
     }
 
+    impl HasViewportPercentage for Length {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                Length::ViewportPercentage(_) => true,
+                _ => false
+            }
+        }
+    }
+
     impl ToCss for Length {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             match *self {
@@ -404,6 +418,15 @@ pub mod specified {
         Sum(Box<CalcSumNode>),
     }
 
+    impl HasViewportPercentage for CalcValueNode {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                CalcValueNode::Length(length) => length.has_viewport_percentage(),
+                _ => false,
+            }
+        }
+    }
+
     #[derive(Clone, Debug)]
     struct SimplifiedSumNode {
         values: Vec<SimplifiedValueNode>,
@@ -428,6 +451,16 @@ pub mod specified {
         Number(CSSFloat),
         Sum(Box<SimplifiedSumNode>),
     }
+
+    impl HasViewportPercentage for SimplifiedValueNode {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                SimplifiedValueNode::Length(length) => length.has_viewport_percentage(),
+                _ => false,
+            }
+        }
+    }
+
     impl<'a> Mul<CSSFloat> for &'a SimplifiedValueNode {
         type Output = SimplifiedValueNode;
 
@@ -872,6 +905,15 @@ pub mod specified {
         Calc(CalcLengthOrPercentage),
     }
 
+    impl HasViewportPercentage for LengthOrPercentage {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                LengthOrPercentage::Length(length) => length.has_viewport_percentage(),
+                _ => false,
+            }
+        }
+    }
+
     impl ToCss for LengthOrPercentage {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             match *self {
@@ -919,6 +961,15 @@ pub mod specified {
         Percentage(Percentage),
         Auto,
         Calc(CalcLengthOrPercentage),
+    }
+
+    impl HasViewportPercentage for LengthOrPercentageOrAuto {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                LengthOrPercentageOrAuto::Length(length) => length.has_viewport_percentage(),
+                _ => false
+            }
+        }
     }
 
     impl ToCss for LengthOrPercentageOrAuto {
@@ -970,6 +1021,15 @@ pub mod specified {
         None,
     }
 
+    impl HasViewportPercentage for LengthOrPercentageOrNone {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                LengthOrPercentageOrNone::Length(length) => length.has_viewport_percentage(),
+                _ => false
+            }
+        }
+    }
+
     impl ToCss for LengthOrPercentageOrNone {
         fn to_css<W>(&self, dest: &mut W) -> fmt::Result where W: fmt::Write {
             match *self {
@@ -1014,6 +1074,15 @@ pub mod specified {
     pub enum LengthOrNone {
         Length(Length),
         None,
+    }
+
+    impl HasViewportPercentage for LengthOrNone {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                LengthOrNone::Length(length) => length.has_viewport_percentage(),
+                _ => false
+            }
+        }
     }
 
     impl ToCss for LengthOrNone {
@@ -1093,6 +1162,16 @@ pub mod specified {
         Top,
         Bottom,
     }
+
+    impl HasViewportPercentage for PositionComponent {
+        fn has_viewport_percentage(&self) -> bool {
+            match *self {
+                PositionComponent::LengthOrPercentage(length_or_percentage) => length_or_percentage.has_viewport_percentage(),
+                _ => false,
+            }
+        }
+    }
+
     impl PositionComponent {
         pub fn parse(input: &mut Parser) -> Result<PositionComponent, ()> {
 
